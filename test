@@ -1,0 +1,1124 @@
+      module comm
+      REAL*8,ALLOCATABLE :: xbas(:,:),ybas(:,:),zbas(:,:)
+      REAL*8,ALLOCATABLE :: xini(:),yini(:),zini(:)
+      REAL*8,ALLOCATABLE :: vx(:),vy(:),vz(:),svx(:),svy(:),svz(:)
+      REAL*8,ALLOCATABLE :: xpos(:),ypos(:),zpos(:)
+      REAL*8,ALLOCATABLE :: xposini(:),yposini(:),zposini(:)
+      REAL*8,ALLOCATABLE :: xposold(:),yposold(:),zposold(:),delta(:)
+
+      REAL*8,ALLOCATABLE :: sxbas(:,:),sybas(:,:),szbas(:,:)
+      REAL*8,ALLOCATABLE :: sxpos(:),sypos(:),szpos(:)
+      REAL*8,ALLOCATABLE :: sxposold(:),syposold(:),szposold(:)
+
+      real*8,allocatable :: phr(:),dphr(:),ibin(:)
+      REAL*8,ALLOCATABLE :: elj(:),fxlj(:),fylj(:),fzlj(:)
+      REAL*8,ALLOCATABLE :: stx(:),sty(:),stz(:)
+
+      REAL*8       :: xbox,ybox,zbox,xboxold,yboxold,zboxold
+      REAL*8       :: xboxold2,yboxold2,zboxold2
+      REAL*8       :: xdif,ydif,zdif,rdif,dt,rms
+      real*8       :: sigma,eps,rini,dr,rc,rcut,a,srcut,vrcut,dvdrc
+      real*8       :: r,sigr,vr,dvdr,vsh,rri,sr,sr1,vm,vnl
+      REAL*8       :: etot,eptot,ektot,fxtot,fytot,fztot,fricmass,pext
+      real*8       :: kb,cumass,cavog,evjoul,akb,temp,step,damp,sveltot
+      real*8       :: vol,volact,press,volold,volvel
+
+
+
+      INTEGER,ALLOCATABLE  :: list(:),nabor(:)
+      INTEGER      :: space,nsize,ncellx,ncelly,ncellz,tot,nbas,itemp
+      INTEGER      :: ibas,iatom,ix,iy,iz,i,j,k,ipbc,ntotal,natoms
+      INTEGER      :: jmin,jmax,jx,mr,iseed(1),istep,nstep,ncount
+      INTEGER      :: cont,conp
+
+      end module comm
+
+      PROGRAM md
+
+c     Program to generate structure
+
+c++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+c     Programmer:
+c     Donghwa Lee
+c     Department of Materials Science and Engineering
+c     University of Florida
+c     phone: (352) 846-3767
+c     donghwa@ufl.edu
+
+c     Version 1.0 3/20 Donghwa Lee
+
+c++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+c     This is MD code with LJ potential
+
+c  variables
+c  cont   : 1 : constant temperature MD, 0 : constant energy MD 
+c  conp   : 1 : constant pressure MD,    0 : constant volume MD
+c  rcut   : cutoff distance
+c  itemp  : initial temperature
+c  dt     : time step
+c  istep  : number of steps to run
+c  nstep,step  : number of step during calculation
+c  iprint :number of steps to print out the energy and structure calculation result
+c  nellx,ncelly,ncellz : system size in x, y and z
+c  kb     : boltzmann constant in eV/atomK
+c  cumass : cupper mass in (^-24 kg/atom)
+c  cavog  : avogadro number
+c  evjoul : conversion factor (^-20 J/eV)
+c  
+
+c++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+      use comm
+      implicit none
+
+      integer   :: iprint
+
+      CALL random_seed
+      CALL random_seed(get=iseed(1:1))
+      WRITE(*,*) 'random seed=',iseed
+
+      open (unit=20,file='temp.dat',status='old')
+
+      read(20,*)itemp
+
+      cont=0
+      conp=1
+      rcut=1.49d0
+      a=3.616d0
+c MD variable
+      damp=0.3d0
+      fricmass=2.0d0
+c      itemp=3100
+      dt=0.001d0
+      istep=100000
+      nstep=0
+      step=0
+      iprint=100
+
+      ncellx=4
+      ncelly=4
+      ncellz=4
+
+      vol=ncellx*ncelly*ncellz
+c unit (ev/atomK)
+      kb=0.000086153d0
+c unit (kg/atom)
+      cumass=0.105523082d0
+      cavog=602.2045d0
+      evjoul=16.02189d0
+      akb=kb*evjoul
+      ncount=0d0
+      allocate(delta(4000))
+       
+      do k=1,4000
+       delta(k)=0.001d0*k
+      enddo
+
+
+      allocate(ibin(4000))
+
+      do k=1,4000
+       ibin(k)=0
+      enddo
+
+      call structure
+      call potential
+      allocate(list(natoms))
+      allocate(nabor(100*natoms))
+      call create_nabor
+      allocate(elj(natoms))
+      allocate(fxlj(natoms))
+      allocate(fylj(natoms))
+      allocate(fzlj(natoms))
+      allocate(stx(natoms))
+      allocate(sty(natoms))
+      allocate(stz(natoms))
+
+
+      call cal_energy
+      call write_energy
+
+
+      if (conp.eq.1)call ini_pressure
+      call ini_velocity
+
+
+      call structure_pbc
+      call cal_energy
+      call write_structure
+
+      if (conp.eq.1) then
+      call pressure
+      call correct_position
+      call structure_pbc
+      call cal_energy
+      endif
+
+      call write_energy
+      
+      call write_structure
+ 73   nstep=nstep+1
+      step=step+1
+      if (conp.eq.1) call create_nabor
+      if (nstep.le.istep) then
+       if (conp.eq.1) then
+       call pressure
+       call correct_position
+       call structure_pbc
+       call cal_energy
+       endif
+
+       call verlet
+       call structure_pbc
+       call cal_energy
+       call mean_displace
+
+       
+      if (step.eq.iprint) then
+       call write_structure
+       call write_energy
+c       call scheck
+       step=0
+      endif
+      goto 73
+      endif
+
+
+      end program md
+
+
+
+
+
+c*******************************************************************************
+c 
+c*******************************************************************************
+
+      subroutine structure
+
+      use comm
+      IMPLICIT none
+
+
+
+c This is temporary program which only can generate monatomic FCC structure.
+
+c      read(*,*) 'How many different atom species do you have?',nbas
+      nbas=1
+c      write(*,*) 'SC : 221, BCC : , FCC : 225, BCC : 229'
+c 101  read(*,*) 'What structure are you interested in?',space
+      space=225
+c Structure verification
+c      if ((space.le.0).or.(space.gt.230)) then
+c      write(*,*) 'Wrong structure number! Space group should be in
+c     1the range of 1 ~ 230!'
+c      go to 101
+c      endif
+
+c calculate number of atoms in basic unicell
+      if (space.eq.225) nsize=4
+      allocate(xbas(nbas,nsize))
+      allocate(ybas(nbas,nsize))
+      allocate(zbas(nbas,nsize))
+      allocate(xini(nbas))
+      allocate(yini(nbas))
+      allocate(zini(nbas))
+
+c This is monatomic case. Therefore, x,y and z initial potision are all zero.
+      do ibas=1,nbas
+c      write(*,*) 'What is atomic coordinate of atom',ibas,' in x,y,z?'
+c 1    format ('What is atomic coordinate of atom',1x,' in x,y,z ?')
+c      read(*,*) xini(ibas),yini(ibas),zini(ibas)
+      xini(ibas)=0.0d0
+      yini(ibas)=0.0d0
+      zini(ibas)=0.0d0
+      enddo !ibas
+
+      call position
+
+ 73   write(*,*) 'Enter number of unit cells in x, y, z'
+c      read(*,*) ncellx,ncelly,ncellz
+
+      if ((ncellx.le.0).or.(ncelly.le.0).or.(ncellz.le.0)) then
+      write(*,*) 'Cell size should be larger than 1'
+      go to 73
+      endif
+c 
+      ntotal=ncellx*ncelly*ncellz*nbas*nsize
+      allocate(xpos(ntotal))
+      allocate(ypos(ntotal))
+      allocate(zpos(ntotal))
+      allocate(sxpos(ntotal))
+      allocate(sypos(ntotal))
+      allocate(szpos(ntotal))
+      allocate(xposini(ntotal))
+      allocate(yposini(ntotal))
+      allocate(zposini(ntotal))
+
+      do ix=1,ncellx
+       do iy=1,ncelly
+        do iz=1,ncellz
+         do i=1,nbas
+         do ibas=1,4
+          iatom=iatom+1
+          xpos(iatom)=dfloat(ix-1)+xbas(i,ibas)
+          ypos(iatom)=dfloat(iy-1)+ybas(i,ibas)
+          zpos(iatom)=dfloat(iz-1)+zbas(i,ibas)
+          write(13,*)xpos(iatom),ypos(iatom),zpos(iatom)
+          xposini(iatom)=xpos(iatom)
+          yposini(iatom)=ypos(iatom)
+          zposini(iatom)=zpos(iatom)
+         enddo ! ibas
+         enddo ! i
+        enddo ! iz
+       enddo ! iy
+      enddo ! ix
+
+      natoms=iatom
+      xbox=dfloat(ncellx)
+      ybox=dfloat(ncelly)
+      zbox=dfloat(ncellz)
+      xboxold=xbox
+      yboxold=ybox
+      zboxold=zbox
+      xboxold2=xbox
+      yboxold2=ybox
+      zboxold2=zbox
+
+      do i=1,natoms
+       sxpos(i)=xpos(i)/xbox
+       sypos(i)=ypos(i)/ybox
+       szpos(i)=zpos(i)/zbox
+      enddo
+
+      deallocate(xbas)
+      deallocate(ybas)
+      deallocate(zbas)
+      deallocate(xini)
+      deallocate(yini)
+      deallocate(zini)
+
+      ipbc=1
+      if (ipbc.eq.1) call scheck
+
+      end ! structure
+
+
+c*******************************************************************************
+c
+c*******************************************************************************
+
+      subroutine position
+      use comm
+      IMPLICIT none
+
+      do i=1,nbas
+      xbas(i,1)=0.0d0+xini(i)
+      ybas(i,1)=0.0d0+yini(i)
+      zbas(i,1)=0.0d0+zini(i)
+      xbas(i,2)=0.5d0+xini(i)
+      ybas(i,2)=0.5d0+yini(i)
+      zbas(i,2)=0.0d0+zini(i)
+      xbas(i,3)=0.0d0+xini(i)
+      ybas(i,3)=0.5d0+yini(i)
+      zbas(i,3)=0.5d0+zini(i)
+      xbas(i,4)=0.5d0+xini(i)
+      ybas(i,4)=0.0d0+yini(i)
+      zbas(i,4)=0.5d0+zini(i)
+      enddo
+
+      end ! position
+
+c*******************************************************************************
+c
+c*******************************************************************************
+
+      subroutine scheck
+
+      use comm
+      implicit none
+
+
+      real*8,allocatable   :: istepbin(:)
+      integer              :: icount
+
+      allocate(istepbin(4000))
+
+      icount=0d0
+      do k=1,3999
+       istepbin(k)=0d0
+      enddo
+
+      do i=1,natoms
+       do j=1,natoms
+        if (i.ne.j) then
+         xdif=sxpos(i)-sxpos(j)
+         ydif=sypos(i)-sypos(j)
+         zdif=szpos(i)-szpos(j)
+
+         xdif=xdif-nint(xdif)
+         ydif=ydif-nint(ydif)
+         zdif=zdif-nint(zdif)
+
+         xdif=xdif*xbox
+         ydif=ydif*ybox
+         zdif=zdif*zbox
+
+         rdif=sqrt(xdif**2+ydif**2+zdif**2)
+         do k=1,3999
+          if ((rdif.ge.delta(k)).and.(rdif.lt.delta(k+1))) then
+          istepbin(k)=istepbin(k)+1
+          icount=icount+1
+          goto 122
+          endif
+         enddo ! k
+        endif
+ 122   enddo ! j
+      enddo ! i
+
+       ncount=ncount+icount
+
+       do k=1,3999
+        ibin(k)=ibin(k)+istepbin(k)
+        istepbin(k)=istepbin(k)/natoms
+        if (istepbin(k).ne.0) write(10,*)nstep,delta(k),istepbin(k)
+       enddo ! k
+
+       if (nstep.ge.istep) then
+       write(10,*)'time average pdf'
+       do k=1,3999
+       ibin(k)=ibin(k)/ncount
+       if (ibin(k).ne.0) write(16,*)delta(k),ibin(k)
+       enddo
+       endif
+
+
+      end ! scheck
+
+c*******************************************************************************
+c
+c*******************************************************************************
+
+      subroutine create_nabor
+
+      use comm
+      implicit none
+
+      integer     :: kl
+
+      kl=0
+
+      do i=1,natoms
+       list(i)=kl+1
+       do j=i+1,natoms
+        xdif=sxpos(i)-sxpos(j)
+        ydif=sypos(i)-sypos(j)
+        zdif=szpos(i)-szpos(j)
+
+        xdif=xdif-nint(xdif)
+        ydif=ydif-nint(ydif)
+        zdif=zdif-nint(zdif)
+
+        xdif=xdif*xbox
+        ydif=ydif*ybox
+        zdif=zdif*zbox
+
+        rdif=sqrt(xdif**2+ydif**2+zdif**2)
+        if (rdif.lt.1.1*rcut) then
+         kl=kl+1
+         nabor(kl)=j
+        endif
+       enddo ! j
+      enddo ! i
+      list(natoms+1)=kl+1
+
+      end ! nabor
+
+
+
+c*******************************************************************************
+c     
+c*******************************************************************************
+
+
+      subroutine potential
+
+      use comm
+      implicit none
+
+      sigma=2.315d0
+      eps=0.167d0
+      rini=0.01d0
+      dr=0.0002d0
+      rc=rcut*a
+
+      tot=(rcut-rini)/dr
+      srcut=sigma/rc
+      vrcut=4*eps*(srcut**12-srcut**6)
+      dvdrc=4*eps*(-12/rc*srcut**12+6/rc*srcut**6)
+
+      allocate(phr(tot))
+      allocate(dphr(tot))
+
+      do i=1,tot
+      r=(rini+i*dr)*a
+      sigr=sigma/r
+      vr=4*eps*(sigr**12-sigr**6)
+      dvdr=4*eps*(-12/r*sigr**12+6/r*sigr**6)
+      vsh=vr-vrcut-(r-rc)*dvdrc
+      phr(i)=vsh
+      dphr(i)=dvdr-dvdrc
+      write(11,*)phr(i),dphr(i)
+      enddo
+
+      end ! potential
+     
+c*******************************************************************************
+c
+c*******************************************************************************
+
+      subroutine set_initial
+      use comm
+      implicit none
+
+      do i=1,natoms
+       elj(i)=0
+       fxlj(i)=0
+       fylj(i)=0
+       fzlj(i)=0
+       stx(i)=0
+       sty(i)=0
+       stz(i)=0
+      enddo
+      etot=0
+      ektot=0
+      eptot=0
+      fxtot=0
+      fytot=0
+      fztot=0
+
+      end ! set_initial
+
+
+c*******************************************************************************
+c
+c*******************************************************************************
+
+      subroutine cal_energy
+      use comm
+      implicit none
+
+      real*8    :: forx,fory,forz
+
+      call set_initial
+      
+      do i=1,natoms
+       jmin=list(i)
+       jmax=list(i+1)-1
+       do jx=jmin,jmax
+        j=nabor(jx)
+        xdif=sxpos(i)-sxpos(j)
+        ydif=sypos(i)-sypos(j)
+        zdif=szpos(i)-szpos(j)
+
+        xdif=xdif-nint(xdif)
+        ydif=ydif-nint(ydif)
+        zdif=zdif-nint(zdif)
+
+        xdif=xdif*xbox
+        ydif=ydif*ybox
+        zdif=zdif*zbox
+
+        rdif=sqrt(xdif**2+ydif**2+zdif**2)
+        if (rdif.gt.rcut) goto 107
+
+        rri=rdif-rini
+        if (rri.lt.dr) rri=dr
+        mr=rri/dr
+        sr=rri/dr-mr
+        sr1=1d0-sr
+        vm=sr1*phr(mr)+sr*phr(mr+1)
+        dvdr=sr1*dphr(mr)+sr*dphr(mr+1)
+        vnl=0.5d0*vm
+        elj(i)=elj(i)+vnl
+        elj(j)=elj(j)+vnl
+        eptot=eptot+vm
+
+        forx=-xdif*dvdr/rdif
+        fory=-ydif*dvdr/rdif
+        forz=-zdif*dvdr/rdif
+        fxlj(i)=fxlj(i)+forx
+        fylj(i)=fylj(i)+fory
+        fzlj(i)=fzlj(i)+forz
+        fxlj(j)=fxlj(j)-forx
+        fylj(j)=fylj(j)-fory
+        fzlj(j)=fzlj(j)-forz
+
+        stx(i)=stx(i)+xdif*forx
+        sty(i)=sty(i)+ydif*fory
+        stz(i)=stz(i)+zdif*forz
+        stx(j)=stx(j)+xdif*forx
+        sty(j)=sty(j)+ydif*fory
+        stz(j)=stz(j)+zdif*forz
+
+ 107   enddo ! j
+      enddo ! i
+
+      end ! cal_energy
+
+c*******************************************************************************
+c
+c*******************************************************************************
+
+      subroutine write_energy
+      use comm
+      implicit none
+
+
+      ektot=1.5d0*kb*temp*natoms
+      eptot=eptot/natoms
+      ektot=ektot/natoms
+      etot=eptot+ektot
+
+      write(12,412) 'step=',nstep,'total energy=',eptot,ektot
+     1,etot,temp
+ 412  format(a7,1i7,a15,4f20.11)
+
+      do i=1,natoms
+       fxtot=fxtot+fxlj(i)
+       fytot=fytot+fylj(i)
+       fztot=fztot+fzlj(i)
+      enddo
+      write(15,414) 'total force=',nstep,fxtot,fytot,fztot
+ 414  format(a12,1i6,3e20.11)
+
+
+      end ! write_energy
+
+
+c*******************************************************************************
+c
+c*******************************************************************************
+
+      subroutine ini_velocity
+      use comm
+      implicit none
+
+      real*8    :: v,vel2,vini,tact,vxini,vyini,vzini
+      real*8    :: xpostemp,ypostemp,zpostemp,vtot,tem
+      real*8    :: velxtemp,velytemp,velztemp,svtot
+      real*8,allocatable  :: vel(:,:)
+c
+      allocate(vel(natoms,3))
+      allocate(xposold(natoms))
+      allocate(yposold(natoms))
+      allocate(zposold(natoms))
+      allocate(sxposold(natoms))
+      allocate(syposold(natoms))
+      allocate(szposold(natoms))
+      allocate(vx(natoms))
+      allocate(vy(natoms))
+      allocate(vz(natoms))
+      allocate(svx(natoms))
+      allocate(svy(natoms))
+      allocate(svz(natoms))
+
+
+
+c unie conversion(ev -> J)
+      
+      vel2=0d0
+      velxtemp=0d0
+      velytemp=0d0
+      velztemp=0d0
+      sveltot=0d0
+
+      do i=1,natoms
+       do j=1,3
+        call random_number(v)
+        v=v-0.5d0
+        if (j.eq.1) velxtemp=velxtemp+v
+        if (j.eq.2) velytemp=velytemp+v
+        if (j.eq.3) velztemp=velztemp+v
+        vel(i,j)=v
+       enddo
+      enddo
+
+      velxtemp=velxtemp/natoms
+      velytemp=velytemp/natoms
+      velztemp=velztemp/natoms
+
+      do i=1,natoms
+        vel(i,1)=vel(i,1)-velxtemp
+        vel(i,2)=vel(i,2)-velytemp
+        vel(i,3)=vel(i,3)-velztemp
+       do j=1,3
+        vel2=vel2+vel(i,j)**2
+       enddo ! j
+      enddo ! i
+
+
+       tact=cumass*vel2/(3.0d0*akb*natoms)
+c unit (A/ps)
+
+      do i=1,natoms 
+       vxini=vel(i,1)*sqrt(itemp/tact)
+       vyini=vel(i,2)*sqrt(itemp/tact)
+       vzini=vel(i,3)*sqrt(itemp/tact)
+
+       vtot=vxini**2+vyini**2+vzini**2
+       tem=cumass*vtot/(3.0d0*akb)
+
+       xpostemp=xpos(i)
+       ypostemp=ypos(i)
+       zpostemp=zpos(i)
+
+       xpos(i)=xpos(i)+vxini/a*dt
+       ypos(i)=ypos(i)+vyini/a*dt
+       zpos(i)=zpos(i)+vzini/a*dt
+
+       xposold(i)=xpostemp
+       yposold(i)=ypostemp
+       zposold(i)=zpostemp
+
+       vx(i)=a*(xpos(i)-xposold(i))/dt
+       vy(i)=a*(ypos(i)-yposold(i))/dt
+       vz(i)=a*(zpos(i)-zposold(i))/dt
+
+       vtot=vx(i)**2+vy(i)**2+vz(i)**2
+       tem=cumass*vtot/(3.0d0*akb*natoms)
+       temp=temp+tem
+
+      enddo ! i
+
+      do i=1,natoms
+       sxpos(i)=xpos(i)/xbox
+       sypos(i)=ypos(i)/ybox
+       szpos(i)=zpos(i)/zbox
+       sxposold(i)=xposold(i)/xboxold
+       syposold(i)=yposold(i)/yboxold
+       szposold(i)=zposold(i)/zboxold
+
+       if (conp.eq.1) then
+        svx(i)=a*(sxpos(i)-sxposold(i))/(2*dt)
+        svy(i)=a*(sypos(i)-syposold(i))/(2*dt)
+        svz(i)=a*(szpos(i)-szposold(i))/(2*dt)
+        svtot=svx(i)**2+svy(i)**2+svz(i)**2
+        sveltot=sveltot+svtot
+       endif ! conp
+
+      enddo ! i
+
+      end ! ini_velocity
+       
+
+
+
+c*******************************************************************************
+c
+c*******************************************************************************
+
+
+      subroutine verlet
+      use comm
+      implicit none
+
+      real*8    :: xpostemp,ypostemp,zpostemp
+      real*8    :: dt2,fxmass,fymass,fzmass,vtot,svtot,tem
+
+      
+
+      dt2=dt*dt
+      temp=0d0
+      sveltot=0d0
+
+      do i=1,natoms
+       xpos(i)=sxpos(i)*xboxold
+       ypos(i)=sypos(i)*yboxold
+       zpos(i)=szpos(i)*zboxold
+       xposold(i)=sxposold(i)*xboxold2
+       yposold(i)=syposold(i)*yboxold2
+       zposold(i)=szposold(i)*zboxold2
+      enddo ! i
+
+      do i=1,natoms
+
+       xpostemp=xpos(i)
+       ypostemp=ypos(i)
+       zpostemp=zpos(i)
+
+c unit conversion
+       fxmass=fxlj(i)*evjoul/(cumass*a)
+       fymass=fylj(i)*evjoul/(cumass*a)
+       fzmass=fzlj(i)*evjoul/(cumass*a)
+
+       xpos(i)=2*xpos(i)-xposold(i)+fxmass*dt2
+       ypos(i)=2*ypos(i)-yposold(i)+fymass*dt2
+       zpos(i)=2*zpos(i)-zposold(i)+fzmass*dt2
+
+       vx(i)=a*(xpos(i)-xposold(i))/(2*dt)
+       vy(i)=a*(ypos(i)-yposold(i))/(2*dt)
+       vz(i)=a*(zpos(i)-zposold(i))/(2*dt)
+
+       vtot=vx(i)**2+vy(i)**2+vz(i)**2
+       tem=cumass*vtot/(3.0d0*akb*natoms)
+       temp=temp+tem
+
+       xposold(i)=xpostemp
+       yposold(i)=ypostemp
+       zposold(i)=zpostemp
+
+      enddo
+
+      if (cont.eq.0) then
+      do i=1,natoms
+       sxpos(i)=xpos(i)/xbox
+       sypos(i)=ypos(i)/ybox
+       szpos(i)=zpos(i)/zbox
+        sxposold(i)=xposold(i)/xboxold
+        syposold(i)=yposold(i)/yboxold
+        szposold(i)=zposold(i)/zboxold
+
+       if (conp.eq.1) then
+        svx(i)=a*(sxpos(i)-sxposold(i))/(2*dt)
+        svy(i)=a*(sypos(i)-syposold(i))/(2*dt)
+        svz(i)=a*(szpos(i)-szposold(i))/(2*dt)
+        svtot=svx(i)**2+svy(i)**2+svz(i)**2
+        sveltot=sveltot+svtot
+       endif ! conp
+      enddo ! i
+
+      elseif (cont.eq.1) then
+      call vel_rescal
+      endif
+
+      end ! 
+
+c*******************************************************************************
+c
+c*******************************************************************************
+
+
+      subroutine write_structure
+      use comm
+      implicit none
+
+      write(14,*) natoms
+      write(14,*)
+c      write(14,510)'nstep=',nstep,'temp=',itemp,'dt=',dt
+ 510  format(a6,1i5,a6,1i4,a4,1f5.4)
+      do i=1,natoms
+       write(14,519)32,sxpos(i)*xbox,sypos(i)*ybox,szpos(i)*zbox
+ 519   format(1i4,3f20.11)
+      enddo
+
+      end ! write_structure
+
+c*******************************************************************************
+c
+c*******************************************************************************
+
+
+      subroutine vel_rescal
+      use comm
+      implicit none
+
+
+
+      real*8    :: vxini,vyini,vzini,vtot,tem,tempold,svtot
+
+      tempold=temp
+      temp=0d0
+      sveltot=0d0
+
+      do i=1,natoms 
+       vxini=vx(i)*sqrt(itemp/tempold)
+       vyini=vy(i)*sqrt(itemp/tempold)
+       vzini=vz(i)*sqrt(itemp/tempold)
+     
+       xpos(i)=xposold(i)+vxini/a*dt
+       ypos(i)=yposold(i)+vyini/a*dt
+       zpos(i)=zposold(i)+vzini/a*dt
+
+       vtot=vxini**2+vyini**2+vzini**2
+       tem=cumass*vtot/(3.0d0*akb*natoms)
+       temp=temp+tem
+
+      enddo
+
+      do i=1,natoms
+       sxpos(i)=xpos(i)/xbox
+       sypos(i)=ypos(i)/ybox
+       szpos(i)=zpos(i)/zbox
+        sxposold(i)=xposold(i)/xboxold
+        syposold(i)=yposold(i)/yboxold
+        szposold(i)=zposold(i)/zboxold
+
+       if (conp.eq.1) then
+        svx(i)=a*(sxpos(i)-sxposold(i))/(2*dt)
+        svy(i)=a*(sypos(i)-syposold(i))/(2*dt)
+        svz(i)=a*(szpos(i)-szposold(i))/(2*dt)
+
+        svtot=svx(i)**2+svy(i)**2+svz(i)**2
+        sveltot=sveltot+svtot
+       endif ! conp
+
+      enddo ! i
+
+
+      end ! vel_rescal
+
+
+c*******************************************************************************
+c
+c*******************************************************************************
+
+
+      subroutine structure_pbc
+      use comm
+      implicit none
+
+      do i=1,natoms
+
+       if (sxpos(i).gt.0.5d0) then
+        sxpos(i)=sxpos(i)-1.0d0
+        sxposold(i)=sxposold(i)-1.0d0
+       endif
+       if (sxpos(i).lt.-0.5d0) then
+        sxpos(i)=sxpos(i)+1.0d0
+        sxposold(i)=sxposold(i)+1.0d0
+       endif
+       if (sypos(i).gt.0.5d0) then
+        sypos(i)=sypos(i)-1.0d0
+        syposold(i)=syposold(i)-1.0d0
+       endif
+       if (sypos(i).lt.-0.5d0) then
+        sypos(i)=sypos(i)+1.0d0
+        syposold(i)=syposold(i)+1.0d0
+       endif
+       if (szpos(i).gt.0.5d0) then
+        szpos(i)=szpos(i)-1.0d0
+        szposold(i)=szposold(i)-1.0d0
+       endif
+       if (szpos(i).lt.-0.5d0) then
+        szpos(i)=szpos(i)+1.0d0
+        szposold(i)=szposold(i)+1.0d0
+       endif
+
+      enddo ! i
+
+      end ! structure_pbc
+
+
+c*******************************************************************************
+c
+c*******************************************************************************
+
+      subroutine mean_displace
+      use comm
+      implicit none
+
+      real*8   :: rdif2,rdif1
+
+      rdif2=0d0
+      rdif1=0d0
+
+      do i=1,natoms
+       xpos(i)=sxpos(i)*xbox
+       ypos(i)=sypos(i)*ybox
+       zpos(i)=szpos(i)*zbox
+
+       xdif=xposini(i)-xpos(i)
+       ydif=yposini(i)-ypos(i)
+       zdif=zposini(i)-zpos(i)
+
+       if (xdif.gt.0.5d0*xbox) xdif=xdif-xbox
+       if (xdif.lt.-0.5d0*xbox) xdif=xdif+xbox
+       if (ydif.gt.0.5d0*ybox) ydif=ydif-ybox
+       if (ydif.lt.-0.5d0*ybox) ydif=ydif+ybox
+       if (zdif.gt.0.5d0*zbox) zdif=zdif-zbox
+       if (zdif.lt.-0.5d0*zbox) zdif=zdif+zbox
+
+       rdif2=xdif**2+ydif**2+zdif**2
+       rdif1=rdif1+rdif2
+       
+      enddo
+
+      rms=sqrt(rdif1/natoms)
+
+      write(17,*)nstep,rms
+
+      end ! initial structure
+
+
+c*******************************************************************************
+c
+c*******************************************************************************
+
+
+
+
+c*******************************************************************************
+c
+c*******************************************************************************
+
+      subroutine ini_pressure
+      use comm
+      implicit none
+
+      real*8   :: stxtot,stytot,stztot,strtot,v2mass
+
+      stxtot=0d0
+      stytot=0d0
+      stztot=0d0
+
+      do i=1,natoms
+       stxtot=stxtot+stx(i)
+       stytot=stytot+sty(i)
+       stztot=stztot+stz(i)
+      enddo
+
+      strtot=(stxtot+stytot+stztot)*evjoul*a
+      v2mass=cumass*sveltot*vol**(2.0d0/3.0d0)
+
+      pext=strtot/(3.0d0*vol)+v2mass/(3.0d0*vol)
+
+      write(*,*) 'pext=',pext
+      volact=vol
+      volold=vol
+
+
+      end ! ini_pressure
+
+
+c*******************************************************************************
+c
+c*******************************************************************************
+
+      subroutine pressure
+      use comm
+      implicit none
+
+      real*8   :: stxtot,stytot,stztot,strtot,v2mass,pact
+      real*8   :: d2vdt2,dvdt,press1,volold2,pv
+
+      stxtot=0d0
+      stytot=0d0
+      stztot=0d0
+      volold2=volact
+
+      do i=1,natoms
+       stxtot=stxtot+stx(i)
+       stytot=stytot+sty(i)
+       stztot=stztot+stz(i)
+      enddo
+
+      strtot=(stxtot+stytot+stztot)*evjoul*a
+      v2mass=cumass*sveltot*volact**(2.0d0/3.0d0)
+
+      strtot=strtot/(3.0d0*volact)
+      v2mass=v2mass/(3.0d0*volact)
+
+      pact=strtot+v2mass
+
+c      write(*,*) strtot,v2mass
+c      write(*,*) 'pact=',pact
+c      volvel=(volact-volold)/dt
+
+c      d2vdt2=(pact-pext)/fricmass-damp*volvel/fricmass
+      d2vdt2=(pact-pext)/fricmass
+      
+      volact=d2vdt2*dt**2+2*volact-volold
+      volvel=(volact-volold)/(2.0d0*dt)
+
+      xboxold2=volold**(1.0d0/3.0d0)
+      yboxold2=volold**(1.0d0/3.0d0)
+      zboxold2=volold**(1.0d0/3.0d0)
+
+      volold=volold2
+
+      xbox=volact**(1.0d0/3.0d0)
+      ybox=volact**(1.0d0/3.0d0)
+      zbox=volact**(1.0d0/3.0d0)
+      xboxold=volold**(1.0d0/3.0d0)
+      yboxold=volold**(1.0d0/3.0d0)
+      zboxold=volold**(1.0d0/3.0d0)
+
+      pv=pact*volact
+c      write(18,1051) 'pact, vol',pact,volact,pv
+ 1051 format(a7,3f20.11)
+
+
+      end ! pressure
+
+
+c*******************************************************************************
+c
+c*******************************************************************************
+
+      subroutine correct_position1
+      use comm
+      implicit none
+
+      real*8  :: ratio
+
+      ratio=(volact/vol)**(1.0d0/3.0d0)
+
+      do i=1,natoms
+      xpos(i)=xpos(i)*ratio
+      ypos(i)=ypos(i)*ratio
+      zpos(i)=zpos(i)*ratio
+      enddo !i
+
+      xbox=dfloat(ncellx)*ratio
+      ybox=dfloat(ncelly)*ratio
+      zbox=dfloat(ncellz)*ratio
+      rcut=rcut*ratio
+
+      end ! correct_position
+
+
+c*******************************************************************************
+c
+c*******************************************************************************
+
+      subroutine correct_position
+      use comm
+      implicit none
+
+      real*8    :: xpostemp,ypostemp,zpostemp,accelx,accely,accelz
+      real*8    :: volactvel,massvol
+
+      do i=1,natoms
+      xpostemp=sxpos(i)
+      ypostemp=sypos(i)
+      zpostemp=szpos(i)
+
+      volactvel=2.0d0/(3.0d0*volold)*volvel
+      massvol=cumass*volold**(1.0d0/3.0d0)
+      accelx=1/massvol*fxlj(i)*evjoul-volactvel*svx(i)
+      accely=1/massvol*fylj(i)*evjoul-volactvel*svy(i)
+      accelz=1/massvol*fzlj(i)*evjoul-volactvel*svz(i)
+
+      sxpos(i)=accelx*dt**2+2.0d0*sxpos(i)-sxposold(i)
+      sypos(i)=accely*dt**2+2.0d0*sypos(i)-syposold(i)
+      szpos(i)=accelz*dt**2+2.0d0*szpos(i)-szposold(i)
+
+      sxposold(i)=xpostemp
+      syposold(i)=ypostemp
+      szposold(i)=zpostemp
+
+c      write(*,*)sxposold(i),sxpos(i)
+c      write(*,*)syposold(i),sypos(i)
+c      write(*,*)szposold(i),szpos(i)
+
+      enddo ! i
+
+      end ! correct_position
+
+c*******************************************************************************
+c
+c*******************************************************************************
+
